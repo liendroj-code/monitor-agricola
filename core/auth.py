@@ -1,105 +1,83 @@
 """
-Módulo de autenticación de usuarios
+Módulo de autenticación de usuarios (Supabase)
 Maneja registro, login y sesiones
 """
 
 import streamlit as st
-import sqlite3
-import hashlib
-import os
-from pathlib import Path
-import uuid
+from supabase import create_client
 
-# Configuración
-# Base de datos global unificada para usuarios
-# La guardamos en el workspace para persistencia o en temp como se pidió.
-# El prompt la pidió en /tmp/monitor_agricola_users.db
-import tempfile
-temp_dir = Path(tempfile.gettempdir())
-DB_AUTH_PATH = temp_dir / "monitor_agricola_users.db"
 
-def get_db_connection():
-    """Conexión a la base de datos de usuarios"""
-    conn = sqlite3.connect(str(DB_AUTH_PATH))
-    return conn
+def get_supabase():
+    """Obtiene el cliente de Supabase desde st.secrets"""
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
 
 def inicializar_tabla_usuarios():
-    """Crea la tabla de usuarios si no existe"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            nombre TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            ultimo_acceso TIMESTAMP
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    """En Supabase, las tablas y roles se manejan externamente o por SQL.
+    Esta función se mantiene para compatibilidad con la inicialización en app.py
+    pero no hace falta ejecutar nada aquí."""
+    pass
 
-def hash_password(password):
-    """Convierte contraseña en hash seguro"""
-    salt = "monitor_agricola_salt"  # En producción, usar salt aleatorio por usuario
-    return hashlib.sha256((password + salt).encode()).hexdigest()
 
 def registrar_usuario(email, nombre, password):
-    """Registra un nuevo usuario"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    """Registra un nuevo usuario en Supabase Auth y luego en la tabla pública de usuarios"""
+    supabase = get_supabase()
     
     try:
-        password_hash = hash_password(password)
-        cursor.execute('''
-            INSERT INTO usuarios (email, nombre, password_hash)
-            VALUES (?, ?, ?)
-        ''', (email, nombre, password_hash))
-        conn.commit()
-        return True, "Usuario registrado correctamente"
-    except sqlite3.IntegrityError:
-        return False, "El email ya está registrado"
-    finally:
-        conn.close()
+        # Registrar en Supabase Auth
+        res = supabase.auth.sign_up({
+            "email": email,
+            "password": password,
+            "options": {
+                "data": {"nombre": nombre}
+            }
+        })
+        
+        if res.user:
+            # Insertar en tabla pública de usuarios (opcional, si tienes una tabla personalizada)
+            supabase.table("usuarios").insert({
+                "id": res.user.id,
+                "email": email,
+                "nombre": nombre
+            }).execute()
+            
+            return {"success": True, "user": res.user}
+        else:
+            return {"success": False, "error": "No se pudo crear el usuario"}
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 
 def verificar_login(email, password):
-    """Verifica credenciales de usuario"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    """Verifica credenciales y retorna el usuario si son correctas"""
+    supabase = get_supabase()
     
-    password_hash = hash_password(password)
-    
-    cursor.execute('''
-        SELECT id, email, nombre FROM usuarios
-        WHERE email = ? AND password_hash = ?
-    ''', (email, password_hash))
-    
-    usuario = cursor.fetchone()
-    conn.close()
-    
-    if usuario:
-        # Actualizar último acceso
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE usuarios SET ultimo_acceso = CURRENT_TIMESTAMP
-            WHERE id = ?
-        ''', (usuario[0],))
-        conn.commit()
-        conn.close()
+    try:
+        res = supabase.auth.sign_in_with_password({
+            "email": email,
+            "password": password
+        })
         
-        return {
-            "id": usuario[0],
-            "email": usuario[1],
-            "nombre": usuario[2]
-        }
-    return None
+        if res.user:
+            return {"success": True, "user": res.user, "session": res.session}
+        else:
+            return {"success": False, "error": "Credenciales inválidas"}
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
-def logout():
-    """Cierra la sesión del usuario"""
-    for key in ['usuario', 'user_id', 'user_email', 'user_name']:
-        if key in st.session_state:
-            del st.session_state[key]
+
+def cerrar_sesion():
+    """Cierra la sesión actual"""
+    supabase = get_supabase()
+    supabase.auth.sign_out()
+    st.session_state.clear()
+
+
+def obtener_usuario_actual():
+    """Obtiene el usuario actual si hay sesión activa"""
+    supabase = get_supabase()
+    return supabase.auth.get_user()

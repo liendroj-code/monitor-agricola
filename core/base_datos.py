@@ -1,281 +1,129 @@
 """
-Módulo de base de datos con soporte multisesión
-Cada usuario tiene su propio archivo .db
+Módulo de base de datos interconectando capa Supabase
 """
 
-import sqlite3
 import streamlit as st
-import os
-import tempfile
-from pathlib import Path
-import hashlib
-import time
+from st_supabase_connection import SupabaseConnection
+
+def get_supabase():
+    """Obtiene el cliente de Supabase desde el wrapper de Streamlit"""
+    return st.connection("supabase", type=SupabaseConnection)
 
 def get_session_id():
-    """Obtiene o crea un ID único para la sesión actual"""
+    """Devuelve el ID UUID del usuario autenticado de la sesión"""
     if "user_id" in st.session_state:
-        # Usar el ID del usuario autenticado para que los datos persistan en su DB
-        return f"user_{st.session_state.user_id}"
-        
-    if "session_id" not in st.session_state:
-        # Crear ID único basado en timestamp + usuario anónimo
-        import uuid
-        st.session_state.session_id = str(uuid.uuid4())[:8]
-    return st.session_state.session_id
-
-def get_db_path():
-    """
-    Devuelve la ruta de la base de datos específica para esta sesión
-    Cada sesión tiene su propio archivo .db
-    """
-    session_id = get_session_id()
-    
-    # Usar carpeta temporal del sistema (se limpia sola al reiniciar)
-    temp_dir = Path(tempfile.gettempdir()) / "monitor_agricola_sessions"
-    temp_dir.mkdir(exist_ok=True)
-    
-    db_path = temp_dir / f"session_{session_id}.db"
-    return str(db_path)
+        return st.session_state.user_id
+    # En esta versión con Supabase, siempre debemos tener user_id validado.
+    raise ValueError("Usuario no validado/ausente. Por favor, inicie sesión.")
 
 def inicializar():
-    """Inicializa la base de datos de la sesión actual"""
-    db_path = get_db_path()
-    
-    # Log para debugging (opcional)
+    """Supabase administra tablas desde su lado. Compatible con app.py"""
     if "db_initialized" not in st.session_state:
         st.session_state.db_initialized = True
-        print(f"Base de datos para esta sesión: {db_path}")
-    
-    conn = sqlite3.connect(db_path)
-    crear_tablas(conn)
-    conn.close()
-
-def crear_tablas(conn):
-    """Crea las tablas si no existen"""
-    cursor = conn.cursor()
-    
-    # Tabla de lotes
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS lotes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            campana TEXT,
-            establecimiento TEXT,
-            lote TEXT,
-            localidad TEXT,
-            provincia TEXT,
-            lat REAL,
-            lon REAL,
-            cultivo TEXT,
-            variedad TEXT,
-            fecha_siembra TEXT,
-            rinde_potencial REAL,
-            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Tabla de monitoreos
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS monitoreos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            lote_id INTEGER,
-            fecha TEXT,
-            etapa_fenologica TEXT,
-            gdc_acumulado REAL,
-            malezas_presentes BOOLEAN,
-            malezas_detalle TEXT,
-            malezas_cobertura REAL,
-            malezas_accion TEXT,
-            insectos_presentes BOOLEAN,
-            insectos_detalle TEXT,
-            insectos_conteo TEXT,
-            insectos_accion TEXT,
-            enf_presentes BOOLEAN,
-            enf_detalle TEXT,
-            enf_incidencia REAL,
-            enf_severidad REAL,
-            enf_accion TEXT,
-            estres_presente BOOLEAN,
-            estres_tipo TEXT,
-            estres_intensidad TEXT,
-            estres_distribucion TEXT,
-            observaciones TEXT,
-            decision TEXT,
-            tecnico TEXT,
-            fecha_carga TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (lote_id) REFERENCES lotes (id)
-        )
-    ''')
-    
-    conn.commit()
-
-def get_connection():
-    """Obtiene conexión a la base de datos de la sesión actual"""
-    db_path = get_db_path()
-    return sqlite3.connect(db_path)
+        print(f"Iniciando instancia Supabase para el usuario: {st.session_state.get('user_name', 'Desconocido')}")
 
 # ============================================================
-# FUNCIONES PARA LOTES
+# FUNCIONES PARA LOTES (CRUD SUPABASE)
 # ============================================================
 
 def guardar_lote(datos):
-    """Guarda un nuevo lote en la base de datos de la sesión"""
-    conn = get_connection()
-    cursor = conn.cursor()
+    """Inserta un nuevo lote en la tabla 'lotes' asociado al usuario activo"""
+    supabase = get_supabase()
+    user_uid = get_session_id()
     
-    cursor.execute('''
-        INSERT INTO lotes (
-            campana, establecimiento, lote, localidad, provincia,
-            lat, lon, cultivo, variedad, fecha_siembra, rinde_potencial
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        datos['campana'], datos['establecimiento'], datos['lote'],
-        datos['localidad'], datos.get('provincia', ''),
-        datos['lat'], datos['lon'], datos['cultivo'],
-        datos['variedad'], datos['fecha_siembra'], datos['rinde_potencial']
-    ))
+    data_to_insert = {
+        "user_id": user_uid,
+        "campana": datos['campana'],
+        "establecimiento": datos['establecimiento'],
+        "lote": datos['lote'],
+        "localidad": datos['localidad'],
+        "provincia": datos.get('provincia', ''),
+        "lat": datos['lat'],
+        "lon": datos['lon'],
+        "cultivo": datos['cultivo'],
+        "variedad": datos['variedad'],
+        "fecha_siembra": datos['fecha_siembra'],
+        "rinde_potencial": datos['rinde_potencial']
+    }
     
-    lote_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    res = supabase.table("lotes").insert(data_to_insert).execute()
+    # supabase python client insert() -> devuelve data=[] en res.data
+    lote_id = res.data[0]['id'] if res.data else None
     return lote_id
 
 def listar_lotes():
-    """Lista todos los lotes de la sesión actual"""
-    conn = get_connection()
-    cursor = conn.cursor()
+    """Lista todos los lotes correspondientes al usuario de la sesión actual (RLS previene cruces)"""
+    supabase = get_supabase()
+    user_uid = get_session_id()
     
-    cursor.execute('''
-        SELECT id, campana, establecimiento, lote, localidad, provincia,
-               lat, lon, cultivo, variedad, fecha_siembra, rinde_potencial
-        FROM lotes
-        ORDER BY id DESC
-    ''')
-    
-    columnas = [desc[0] for desc in cursor.description]
-    resultados = []
-    
-    for row in cursor.fetchall():
-        lote = dict(zip(columnas, row))
-        resultados.append(lote)
-    
-    conn.close()
-    return resultados
+    res = supabase.table("lotes").select("*").eq("user_id", user_uid).order("id", desc=True).execute()
+    return res.data
 
 def actualizar_lote(lote_id, datos):
-    """Actualiza un lote existente"""
-    conn = get_connection()
-    cursor = conn.cursor()
+    """Actualiza un lote existente con Supabase"""
+    supabase = get_supabase()
+    user_uid = get_session_id()
     
-    cursor.execute('''
-        UPDATE lotes SET
-            campana = ?, establecimiento = ?, lote = ?,
-            localidad = ?, provincia = ?, lat = ?, lon = ?,
-            cultivo = ?, variedad = ?, fecha_siembra = ?,
-            rinde_potencial = ?
-        WHERE id = ?
-    ''', (
-        datos['campana'], datos['establecimiento'], datos['lote'],
-        datos['localidad'], datos.get('provincia', ''),
-        datos['lat'], datos['lon'], datos['cultivo'],
-        datos['variedad'], datos['fecha_siembra'],
-        datos['rinde_potencial'], lote_id
-    ))
+    data_to_update = {
+        "campana": datos['campana'],
+        "establecimiento": datos['establecimiento'],
+        "lote": datos['lote'],
+        "localidad": datos['localidad'],
+        "provincia": datos.get('provincia', ''),
+        "lat": datos['lat'],
+        "lon": datos['lon'],
+        "cultivo": datos['cultivo'],
+        "variedad": datos['variedad'],
+        "fecha_siembra": datos['fecha_siembra'],
+        "rinde_potencial": datos['rinde_potencial']
+    }
     
-    conn.commit()
-    conn.close()
+    supabase.table("lotes").update(data_to_update).eq("id", lote_id).eq("user_id", user_uid).execute()
 
 def eliminar_lote(lote_id):
-    """Elimina un lote y sus monitoreos asociados"""
-    conn = get_connection()
-    cursor = conn.cursor()
+    """Aprovechando ON DELETE CASCADE en supabase los monitoreos volaran si los borramos."""
+    supabase = get_supabase()
+    user_uid = get_session_id()
     
-    # Eliminar monitoreos del lote
-    cursor.execute('DELETE FROM monitoreos WHERE lote_id = ?', (lote_id,))
-    
-    # Eliminar el lote
-    cursor.execute('DELETE FROM lotes WHERE id = ?', (lote_id,))
-    
-    conn.commit()
-    conn.close()
+    supabase.table("lotes").delete().eq("id", lote_id).eq("user_id", user_uid).execute()
 
 # ============================================================
-# FUNCIONES PARA MONITOREOS
+# FUNCIONES PARA MONITOREOS (CRUD SUPABASE)
 # ============================================================
 
 def guardar_monitoreo(datos):
-    """Guarda un nuevo monitoreo"""
-    conn = get_connection()
-    cursor = conn.cursor()
+    """Guarda un nuevo monitoreo. Recordar setear context de user_id."""
+    supabase = get_supabase()
+    user_uid = get_session_id()
     
-    placeholders = ', '.join(['?'] * len(datos))
-    columnas = ', '.join(datos.keys())
-    
-    query = f'INSERT INTO monitoreos ({columnas}) VALUES ({placeholders})'
-    cursor.execute(query, list(datos.values()))
-    
-    mon_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    datos["user_id"] = user_uid
+    res = supabase.table("monitoreos").insert(datos).execute()
+    mon_id = res.data[0]['id'] if res.data else None
     return mon_id
 
 def listar_monitoreos(lote_id=None, etapa=None, fecha_desde=None, fecha_hasta=None):
-    """Lista monitoreos con filtros opcionales"""
-    conn = get_connection()
-    cursor = conn.cursor()
+    """Lista monitoreos con Supabase filtering"""
+    supabase = get_supabase()
+    user_uid = get_session_id()
     
-    query = 'SELECT * FROM monitoreos WHERE 1=1'
-    params = []
+    query = supabase.table("monitoreos").select("*").eq("user_id", user_uid)
     
     if lote_id:
-        query += ' AND lote_id = ?'
-        params.append(lote_id)
-    
+        query = query.eq("lote_id", lote_id)
     if etapa and etapa != 'Todas':
-        query += ' AND etapa_fenologica = ?'
-        params.append(etapa)
-    
+        query = query.eq("etapa_fenologica", etapa)
     if fecha_desde:
-        query += ' AND fecha >= ?'
-        params.append(fecha_desde)
-    
+        query = query.gte("fecha", fecha_desde)
     if fecha_hasta:
-        query += ' AND fecha <= ?'
-        params.append(fecha_hasta)
-    
-    query += ' ORDER BY fecha DESC'
-    
-    cursor.execute(query, params)
-    
-    columnas = [desc[0] for desc in cursor.description]
-    resultados = []
-    
-    for row in cursor.fetchall():
-        monitoreo = dict(zip(columnas, row))
-        resultados.append(monitoreo)
-    
-    conn.close()
-    return resultados
+        query = query.lte("fecha", fecha_hasta)
+        
+    query = query.order("fecha", desc=True)
+    res = query.execute()
+    return res.data
 
 def eliminar_monitoreo(monitoreo_id):
-    """Elimina un monitoreo"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM monitoreos WHERE id = ?', (monitoreo_id,))
-    conn.commit()
-    conn.close()
-
-# Función para limpiar sesiones viejas (opcional)
-def limpiar_sesiones_antiguas(horas=24):
-    """
-    Elimina archivos de base de datos de sesiones inactivas
-    (para ejecutar periódicamente si se desea)
-    """
-    temp_dir = Path(tempfile.gettempdir()) / "monitor_agricola_sessions"
-    if not temp_dir.exists():
-        return
+    """Elimina un monitoreo de la nube Supabase"""
+    supabase = get_supabase()
+    user_uid = get_session_id()
     
-    ahora = time.time()
-    for archivo in temp_dir.glob("session_*.db"):
-        # Si el archivo tiene más de 'horas' horas, eliminarlo
-        if ahora - archivo.stat().st_mtime > horas * 3600:
-            archivo.unlink()
+    supabase.table("monitoreos").delete().eq("id", monitoreo_id).eq("user_id", user_uid).execute()

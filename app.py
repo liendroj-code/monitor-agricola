@@ -103,7 +103,9 @@ with st.sidebar:
         nombre_lote     = f"{lote_sel['establecimiento']} — {lote_sel['lote']}"
         lat             = lote_sel["lat"]
         lon             = lote_sel["lon"]
-        fecha_siembra   = datetime.strptime(lote_sel["fecha_siembra"], "%Y-%m-%d").date()
+        # Supabase devuelve fecha normal o ISO, normalizamos a '%Y-%m-%d'
+        fs_str = lote_sel["fecha_siembra"][:10]
+        fecha_siembra   = datetime.strptime(fs_str, "%Y-%m-%d").date()
         rinde_potencial = lote_sel["rinde_potencial"]
         lote_id_activo  = lote_sel["id"]
 
@@ -156,7 +158,7 @@ with st.sidebar:
         fecha_siembra   = st.date_input("Fecha de siembra", value=date(2025, 12, 20),
                                          min_value=date(2020,1,1), max_value=date.today())
         rinde_potencial = st.number_input("Rinde potencial (kg/ha)",
-                                           value=cultivo_mod.RINDE_POTENCIAL_BASE,
+                                           value=int(rinde_potencial) if rinde_potencial else 3000,
                                            step=100, min_value=500, max_value=20000)
         nombre_lote    = f"{estab_n} — {lote_n}" if estab_n and lote_n else "Nuevo lote"
         lote_id_activo = None
