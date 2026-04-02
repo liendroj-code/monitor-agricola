@@ -37,15 +37,18 @@ if "user_id" not in st.session_state:
                 email_log = st.text_input("Email")
                 pass_log = st.text_input("Contraseña", type="password")
                 if st.form_submit_button("Entrar", use_container_width=True):
-                    user = auth.verificar_login(email_log, pass_log)
-                    if user:
-                        st.session_state.user_id = user["id"]
-                        st.session_state.user_email = user["email"]
-                        st.session_state.user_name = user["nombre"]
-                        st.success(f"Bienvenido {user['nombre']}")
+                    resultado = auth.verificar_login(email_log, pass_log)
+                    if resultado and resultado.get("success"):
+                        u      = resultado["user"]
+                        nombre = (u.user_metadata or {}).get("nombre", email_log.split("@")[0])
+                        st.session_state.user_id    = u.id
+                        st.session_state.user_email = u.email
+                        st.session_state.user_name  = nombre
+                        st.success(f"Bienvenido {nombre}")
                         st.rerun()
                     else:
-                        st.error("Credenciales incorrectas")
+                        err = resultado.get("error", "Credenciales incorrectas") if resultado else "Credenciales incorrectas"
+                        st.error(err)
                         
         with tab_reg:
             with st.form("form_registro"):
@@ -54,13 +57,14 @@ if "user_id" not in st.session_state:
                 pass_reg = st.text_input("Contraseña", type="password")
                 if st.form_submit_button("Crear cuenta", use_container_width=True):
                     if nombre_reg and email_reg and pass_reg:
-                        ok, msg = auth.registrar_usuario(email_reg, nombre_reg, pass_reg)
-                        if ok:
-                            st.success(msg + ". Ya puedes iniciar sesión.")
+                        resultado = auth.registrar_usuario(email_reg, nombre_reg, pass_reg)
+                        if resultado and resultado.get("success"):
+                            st.success("✅ Cuenta creada. Ya podés iniciar sesión.")
                         else:
-                            st.error(msg)
+                            err = resultado.get("error", "Error al registrar") if resultado else "Error al registrar"
+                            st.error(err)
                     else:
-                        st.warning("Completa todos los campos")
+                        st.warning("Completá todos los campos")
     st.stop()
 
 base_datos.inicializar()
@@ -122,7 +126,7 @@ with st.sidebar:
             lote_e      = st.text_input("Lote N°",          value=lote_sel["lote"],           key="e_lot")
             localidad_e = st.text_input("Localidad",        value=lote_sel["localidad"],      key="e_loc")
             prov_e      = st.text_input("Provincia",        value=lote_sel.get("provincia",""),key="e_prov")
-            rp_e        = st.number_input("Rinde potencial (kg/ha)", value=rinde_potencial, step=100, key="e_rp")
+            rp_e        = st.number_input("Rinde potencial (kg/ha)", value=int(rinde_potencial) if rinde_potencial else 3000, step=100, key="e_rp")
             if st.button("💾 Guardar cambios", key="btn_editar"):
                 base_datos.actualizar_lote(lote_id_activo, {
                     "campana": campana_e, "establecimiento": estab_e,
