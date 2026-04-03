@@ -36,12 +36,12 @@ def registrar_usuario(email, nombre, password):
         })
         
         if res.user:
-            # Insertar en tabla pública de usuarios (opcional, si tienes una tabla personalizada)
-            supabase.table("usuarios").insert({
-                "id": res.user.id,
-                "email": email,
-                "nombre": nombre
-            }).execute()
+            # ✅ Comentamos la inserción manual - el trigger de Supabase se encarga
+            # supabase.table("usuarios").insert({
+            #     "id": res.user.id,
+            #     "email": email,
+            #     "nombre": nombre
+            # }).execute()
             
             return {"success": True, "user": res.user}
         else:
