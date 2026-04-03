@@ -36,13 +36,8 @@ def registrar_usuario(email, nombre, password):
         })
         
         if res.user:
-            # ✅ Comentamos la inserción manual - el trigger de Supabase se encarga
-            # supabase.table("usuarios").insert({
-            #     "id": res.user.id,
-            #     "email": email,
-            #     "nombre": nombre
-            # }).execute()
-            
+            # La inserción en tabla 'usuarios' la maneja el trigger de Supabase
+            # No es necesario insertar manualmente
             return {"success": True, "user": res.user}
         else:
             return {"success": False, "error": "No se pudo crear el usuario"}
@@ -73,3 +68,25 @@ def verificar_login(email, password):
             
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def cerrar_sesion():
+    """Cierra la sesión actual"""
+    supabase = get_supabase()
+    supabase.auth.sign_out()
+    # Limpiar session_state
+    for key in ['supabase_session', 'user_id', 'user_name']:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.session_state.clear()
+
+
+def logout():
+    """Alias para cerrar_sesion() - mantiene compatibilidad"""
+    cerrar_sesion()
+
+
+def obtener_usuario_actual():
+    """Obtiene el usuario actual si hay sesión activa"""
+    supabase = get_supabase()
+    return supabase.auth.get_user()
